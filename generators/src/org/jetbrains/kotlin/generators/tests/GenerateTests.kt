@@ -346,6 +346,10 @@ fun main(args: Array<String>) {
             model("compileJavaAgainstKotlin")
         }
 
+        testClass<AbstractCompileKotlinAgainstJavaTest> {
+            model("compileKotlinAgainstJava")
+        }
+
         testClass<AbstractCompileKotlinAgainstKotlinTest> {
             model("compileKotlinAgainstKotlin")
         }
