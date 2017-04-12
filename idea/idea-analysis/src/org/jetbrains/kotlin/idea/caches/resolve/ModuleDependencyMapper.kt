@@ -33,11 +33,15 @@ import org.jetbrains.kotlin.descriptors.SourceKind
 import org.jetbrains.kotlin.idea.project.AnalyzerFacadeProvider
 import org.jetbrains.kotlin.idea.project.IdeaEnvironment
 import org.jetbrains.kotlin.idea.project.TargetPlatformDetector
+import org.jetbrains.kotlin.idea.stubindex.PackageIndexUtil
+import org.jetbrains.kotlin.idea.stubindex.resolve.PluginDeclarationProviderFactory
 import org.jetbrains.kotlin.load.java.structure.JavaClass
 import org.jetbrains.kotlin.load.java.structure.impl.JavaClassImpl
+import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.resolve.TargetPlatform
 import org.jetbrains.kotlin.resolve.jvm.JvmPlatformParameters
+import org.jetbrains.kotlin.resolve.jvm.KotlinJavaPsiFacade
 
 fun createModuleResolverProvider(
         debugName: String,
@@ -94,6 +98,23 @@ fun createModuleResolverProvider(
                         is ModuleTestSourceInfo -> SourceKind.TEST
                         else -> SourceKind.NONE
                     }
+                },
+                checkPackage = l1@{
+                    fqName: FqName, ideaModuleInfo: IdeaModuleInfo ->
+
+                    if (KotlinJavaPsiFacade.getInstance(project).findPackage(fqName.asString(), ideaModuleInfo.contentScope()) != null) return@l1 true
+
+                    if (ideaModuleInfo.moduleOrigin != ModuleOrigin.MODULE) return@l1 false
+
+                    val x = PluginDeclarationProviderFactory.packageExists(fqName, ideaModuleInfo.contentScope(), ideaModuleInfo, project)
+
+                    if (!x) return@l1 false
+
+                    assert(PackageIndexUtil.packageExists(fqName, ideaModuleInfo.contentScope(), project)) {
+                        "abcde"
+                    }
+
+                    true
                 }
 
         )

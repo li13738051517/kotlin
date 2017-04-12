@@ -165,7 +165,8 @@ abstract class AnalyzerFacade<in P : PlatformAnalysisParameters> {
             packagePartProviderFactory: (M, ModuleContent) -> PackagePartProvider = { _, _ -> PackagePartProvider.Empty },
             firstDependency: M? = null,
             modulePlatforms: (M) -> MultiTargetPlatform?,
-            moduleSources: (M) -> SourceKind = { SourceKind.NONE }
+            moduleSources: (M) -> SourceKind = { SourceKind.NONE },
+            checkPackage: (FqName, M) -> Boolean = { fqName: FqName, m: M -> true }
     ): ResolverForProject<M> {
         val storageManager = projectContext.storageManager
         fun createResolverForProject(): ResolverForProjectImpl<M> {
@@ -222,16 +223,20 @@ abstract class AnalyzerFacade<in P : PlatformAnalysisParameters> {
             modules.forEach {
                 module ->
                 val descriptor = resolverForProject.descriptorForModule(module)
+                val content = modulesContent(module)
                 val computeResolverForModule = storageManager.createLazyValue {
-                    val content = modulesContent(module)
                     createResolverForModule(
-                            module, descriptor, projectContext.withModule(descriptor), modulesContent(module),
+                            module, descriptor, projectContext.withModule(descriptor), content,
                             platformParameters, targetEnvironment, resolverForProject,
                             packagePartProviderFactory(module, content)
                     )
                 }
 
-                descriptor.initialize(DelegatingPackageFragmentProvider { computeResolverForModule().packageFragmentProvider })
+                descriptor.initialize(
+                        DelegatingPackageFragmentProvider({ fqName: FqName -> checkPackage(fqName, module) }) {
+                            computeResolverForModule().packageFragmentProvider
+                        }
+                )
                 resolverForProject.resolverByModuleDescriptor[descriptor] = computeResolverForModule
             }
         }
@@ -256,14 +261,17 @@ abstract class AnalyzerFacade<in P : PlatformAnalysisParameters> {
 
 //NOTE: relies on delegate to be lazily computed and cached
 private class DelegatingPackageFragmentProvider(
+        private val checkPackage: (FqName) -> Boolean,
         private val delegate: () -> PackageFragmentProvider
 ) : PackageFragmentProvider {
 
     override fun getPackageFragments(fqName: FqName): List<PackageFragmentDescriptor> {
+        if (!checkPackage(fqName)) return emptyList()
         return delegate().getPackageFragments(fqName)
     }
 
     override fun getSubPackagesOf(fqName: FqName, nameFilter: (Name) -> Boolean): Collection<FqName> {
+        if (!checkPackage(fqName)) return emptyList()
         return delegate().getSubPackagesOf(fqName, nameFilter)
     }
 }
