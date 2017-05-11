@@ -46,8 +46,8 @@ import java.util.*
 import kotlin.coroutines.experimental.buildSequence
 
 class ResolverForModule(
-    val packageFragmentProvider: PackageFragmentProvider,
-    val componentProvider: ComponentProvider
+        val packageFragmentProvider: PackageFragmentProvider,
+        val componentProvider: ComponentProvider
 )
 
 abstract class ResolverForProject<M : ModuleInfo> {
@@ -168,7 +168,8 @@ abstract class AnalyzerFacade<in P : PlatformAnalysisParameters> {
                 delegateResolver: ResolverForProject<M> = EmptyResolverForProject(),
                 packagePartProviderFactory: (M, ModuleContent) -> PackagePartProvider = { _, _ -> PackagePartProvider.Empty },
                 firstDependency: M? = null,
-                modulePlatforms: (M) -> MultiTargetPlatform?
+                modulePlatforms: (M) -> MultiTargetPlatform?,
+                packageOracleFactory: PackageOracleFactory = PackageOracleFactory.OptimisticFactory
         ): ResolverForProject<M> {
             val storageManager = projectContext.storageManager
 
@@ -212,10 +213,10 @@ abstract class AnalyzerFacade<in P : PlatformAnalysisParameters> {
 
             for (module in modules) {
                 val descriptor = resolverForProject.descriptorForModule(module)
+                val content = modulesContent(module)
                 val computeResolverForModule = storageManager.createLazyValue {
                     ResolverForModuleComputationTracker.getInstance(projectContext.project)?.onResolverComputed(module)
 
-                    val content = modulesContent(module)
                     analyzerFacade(module).createResolverForModule(
                             module, descriptor, projectContext.withModule(descriptor), modulesContent(module),
                             platformParameters, targetEnvironment, resolverForProject,
@@ -223,7 +224,9 @@ abstract class AnalyzerFacade<in P : PlatformAnalysisParameters> {
                     )
                 }
 
-                descriptor.initialize(DelegatingPackageFragmentProvider { computeResolverForModule().packageFragmentProvider })
+                descriptor.initialize(DelegatingPackageFragmentProvider(content, packageOracleFactory.createOracle(module)) {
+                    computeResolverForModule().packageFragmentProvider
+                })
                 resolverForProject.resolverByModuleDescriptor[descriptor] = computeResolverForModule
             }
 
@@ -247,15 +250,40 @@ abstract class AnalyzerFacade<in P : PlatformAnalysisParameters> {
 
 //NOTE: relies on delegate to be lazily computed and cached
 private class DelegatingPackageFragmentProvider(
+        moduleContent: ModuleContent,
+        private val packageOracle: PackageOracle,
         private val delegate: () -> PackageFragmentProvider
 ) : PackageFragmentProvider {
+    private val syntheticFilePackages = moduleContent.syntheticFiles.map { it.packageFqName }.toSet()
 
     override fun getPackageFragments(fqName: FqName): List<PackageFragmentDescriptor> {
+        if (certainlyDoesNotExist(fqName)) return emptyList()
+
         return delegate().getPackageFragments(fqName)
     }
 
     override fun getSubPackagesOf(fqName: FqName, nameFilter: (Name) -> Boolean): Collection<FqName> {
+        if (certainlyDoesNotExist(fqName)) return emptyList()
+
         return delegate().getSubPackagesOf(fqName, nameFilter)
+    }
+
+    private fun certainlyDoesNotExist(fqName: FqName) = !packageOracle.packageExists(fqName) && fqName !in syntheticFilePackages
+}
+
+interface PackageOracle {
+    fun packageExists(fqName: FqName): Boolean
+
+    object Optimistic : PackageOracle {
+        override fun packageExists(fqName: FqName): Boolean = true
+    }
+}
+
+interface PackageOracleFactory {
+    fun createOracle(moduleInfo: ModuleInfo): PackageOracle
+
+    object OptimisticFactory : PackageOracleFactory {
+        override fun createOracle(moduleInfo: ModuleInfo) = PackageOracle.Optimistic
     }
 }
 
