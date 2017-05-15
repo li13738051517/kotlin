@@ -63,7 +63,7 @@ class CopyKotlinDeclarationDialog(
         override fun reportBaseInTestSelectionInSource() = true
     }
 
-    private val originalFile = klass.containingFile
+    private val originalFile = declaration.containingFile
 
     var targetDirectory: MoveDestination? = null
         private set
@@ -143,7 +143,7 @@ class CopyKotlinDeclarationDialog(
         }
 
         targetDirectory?.getTargetIfExists(defaultTargetDirectory)?.let {
-            val targetFileName = className + "." + originalFile.virtualFile.extension
+            val targetFileName = newName + "." + originalFile.virtualFile.extension
             if (it.findFile(targetFileName) == originalFile) {
                 return "Can't copy class to the containing file"
             }
