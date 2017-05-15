@@ -15,12 +15,12 @@
  */
 package org.jetbrains.kotlin.idea.refactoring.copy
 
-import com.intellij.openapi.help.HelpManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.JavaProjectRootsUtil
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
-import com.intellij.psi.*
+import com.intellij.psi.PsiDirectory
+import com.intellij.psi.PsiManager
 import com.intellij.refactoring.HelpID
 import com.intellij.refactoring.MoveDestination
 import com.intellij.refactoring.PackageWrapper
@@ -28,7 +28,6 @@ import com.intellij.refactoring.RefactoringBundle
 import com.intellij.refactoring.copy.CopyFilesOrDirectoriesDialog
 import com.intellij.refactoring.move.moveClassesOrPackages.DestinationFolderComboBox
 import com.intellij.refactoring.ui.PackageNameReferenceEditorCombo
-import com.intellij.refactoring.util.RefactoringMessageUtil
 import com.intellij.ui.EditorTextField
 import com.intellij.ui.RecentsManager
 import com.intellij.ui.ReferenceEditorComboWithBrowseButton
@@ -37,22 +36,22 @@ import com.intellij.util.IncorrectOperationException
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.UIUtil
 import org.jetbrains.annotations.NonNls
-import org.jetbrains.kotlin.idea.core.KotlinNameSuggester
 import org.jetbrains.kotlin.idea.core.getPackage
 import org.jetbrains.kotlin.idea.refactoring.Pass
 import org.jetbrains.kotlin.idea.refactoring.hasIdentifiersOnly
 import org.jetbrains.kotlin.name.FqNameUnsafe
 import org.jetbrains.kotlin.psi.KtClassOrObject
-
-import javax.swing.*
-import java.awt.*
+import java.awt.BorderLayout
+import java.awt.Font
+import javax.swing.JComponent
+import javax.swing.JLabel
+import javax.swing.JPanel
 
 // Based on com.intellij.refactoring.copy.CopyClassDialog
 class CopyKotlinClassDialog(
         klass: KtClassOrObject,
         private val defaultTargetDirectory: PsiDirectory?,
-        private val project: Project,
-        private val doClone: Boolean
+        private val project: Project
 ) : DialogWrapper(project, true) {
     private val informationLabel = JLabel()
     private val classNameField = EditorTextField("")
@@ -60,16 +59,17 @@ class CopyKotlinClassDialog(
     private lateinit var packageNameField: ReferenceEditorComboWithBrowseButton
     private val openInEditorCheckBox = CopyFilesOrDirectoriesDialog.createOpenInEditorCB()
     private val destinationComboBox = object : DestinationFolderComboBox() {
-        override fun getTargetPackage() = packageNameField.text.trim { it <= ' ' }
+        override fun getTargetPackage() = packageNameField.text.trim()
         override fun reportBaseInTestSelectionInSource() = true
     }
+
+    private val originalFile = klass.containingFile
 
     var targetDirectory: MoveDestination? = null
         private set
 
     init {
-        val key = if (doClone) "copy.class.clone.0.1" else "copy.class.copy.0.1"
-        informationLabel.text = RefactoringBundle.message(key, UsageViewUtil.getType(klass), UsageViewUtil.getLongName(klass))
+        informationLabel.text = RefactoringBundle.message("copy.class.copy.0.1", UsageViewUtil.getType(klass), UsageViewUtil.getLongName(klass))
         informationLabel.font = informationLabel.font.deriveFont(Font.BOLD)
 
         init()
@@ -84,8 +84,6 @@ class CopyKotlinClassDialog(
         classNameField.selectAll()
     }
 
-    override fun createActions() = arrayOf(okAction, cancelAction, helpAction)
-
     override fun getPreferredFocusedComponent() = classNameField
 
     override fun createCenterPanel() = JPanel(BorderLayout())
@@ -96,15 +94,11 @@ class CopyKotlinClassDialog(
         packageNameField.setTextFieldPreferredWidth(Math.max(qualifiedName.length + 5, 40))
         packageLabel.text = RefactoringBundle.message("destination.package")
         packageLabel.labelFor = packageNameField
-        if (doClone) {
-            packageNameField.isVisible = false
-            packageLabel.isVisible = false
-        }
 
         val label = JLabel(RefactoringBundle.message("target.destination.folder"))
         val isMultipleSourceRoots = JavaProjectRootsUtil.getSuitableDestinationSourceRoots(project).size > 1
-        destinationComboBox.isVisible = !doClone && isMultipleSourceRoots
-        label.isVisible = !doClone && isMultipleSourceRoots
+        destinationComboBox.isVisible = isMultipleSourceRoots
+        label.isVisible = isMultipleSourceRoots
         label.labelFor = destinationComboBox
 
         val panel = JPanel(BorderLayout())
@@ -137,20 +131,21 @@ class CopyKotlinClassDialog(
             return RefactoringBundle.message("invalid.target.package.name.specified")
         }
 
-        if (className != null && className.isEmpty()) {
+        if (className.isNullOrEmpty()) {
             return RefactoringBundle.message("no.class.name.specified")
         }
 
-        if (!KotlinNameSuggester.isIdentifier(className)) {
-            return RefactoringMessageUtil.getIncorrectIdentifierMessage(className)
+        try {
+            targetDirectory = destinationComboBox.selectDirectory(PackageWrapper(manager, packageName), false)
+        }
+        catch (e: IncorrectOperationException) {
+            return e.message
         }
 
-        if (!doClone) {
-            try {
-                targetDirectory = destinationComboBox.selectDirectory(PackageWrapper(manager, packageName), false)
-            }
-            catch (e: IncorrectOperationException) {
-                return e.message
+        targetDirectory?.getTargetIfExists(defaultTargetDirectory)?.let {
+            val targetFileName = className + "." + originalFile.virtualFile.extension
+            if (it.findFile(targetFileName) == originalFile) {
+                return "Can't copy class to the containing file"
             }
         }
 
@@ -175,7 +170,7 @@ class CopyKotlinClassDialog(
         super.doOKAction()
     }
 
-    override fun doHelpAction() = HelpManager.getInstance().invokeHelp(HelpID.COPY_CLASS)
+    override fun getHelpId() = HelpID.COPY_CLASS
 
     companion object {
         @NonNls private val RECENTS_KEY = "CopyKotlinClassDialog.RECENTS_KEY"

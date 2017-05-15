@@ -33,6 +33,7 @@ import com.intellij.util.IncorrectOperationException
 import org.jetbrains.annotations.TestOnly
 import org.jetbrains.kotlin.idea.codeInsight.shorten.performDelayedRefactoringRequests
 import org.jetbrains.kotlin.idea.core.getPackage
+import org.jetbrains.kotlin.idea.core.quoteIfNeeded
 import org.jetbrains.kotlin.idea.refactoring.createKotlinFile
 import org.jetbrains.kotlin.idea.refactoring.move.*
 import org.jetbrains.kotlin.idea.util.application.executeCommand
@@ -147,7 +148,7 @@ class CopyKotlinClassHandler : CopyHandlerDelegateBase() {
         var moveDestination: MoveDestination? = null
 
         if (!ApplicationManager.getApplication().isUnitTestMode) {
-            val dialog = CopyKotlinClassDialog(classToCopy, defaultTargetDirectory, project, false)
+            val dialog = CopyKotlinClassDialog(classToCopy, initialTargetDirectory, project)
             dialog.title = commandName
             if (!dialog.showAndGet()) return
 
@@ -184,7 +185,7 @@ class CopyKotlinClassHandler : CopyHandlerDelegateBase() {
 
                 runWriteAction {
                     val newClass = targetFile.add(classToCopy.copy()) as KtClassOrObject
-                    newClass.setName(newClassName!!)
+                    newClass.setName(newClassName!!.quoteIfNeeded())
 
                     val oldToNewElementsMapping: Map<PsiElement, PsiElement> = mapOf(classToCopy to newClass)
                     restoredInternalUsages += restoreInternalUsages(newClass, oldToNewElementsMapping, true)
