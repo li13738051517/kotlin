@@ -132,10 +132,16 @@ class DefaultLambda(
             "Can't find non-default constructor <init>$descriptor for default lambda $lambdaClassType"
         }
 
-        capturedVars = constructor?.findCapturedFieldAssignmentInstructions()?.map {
-            fieldNode ->
-            capturedParamDesc(fieldNode.name, Type.getType(fieldNode.desc))
-        }?.toList() ?: emptyList()
+        capturedVars =
+                if (isFunctionReference || isPropertyReference)
+                    constructor?.desc?.let { Type.getArgumentTypes(it) }?.singleOrNull()?.let {
+                        listOf(capturedParamDesc(AsmUtil.RECEIVER_NAME, it))
+                    } ?: emptyList()
+                else
+                    constructor?.findCapturedFieldAssignmentInstructions()?.map {
+                        fieldNode ->
+                        capturedParamDesc(fieldNode.name, Type.getType(fieldNode.desc))
+                    }?.toList() ?: emptyList()
 
 
         invokeMethod = Method(
