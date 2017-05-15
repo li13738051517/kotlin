@@ -161,7 +161,7 @@ class CopyKotlinClassesHandler : CopyHandlerDelegateBase() {
                 targetDirWrapper = dialog.targetDirectory?.toDirectoryWrapper() ?: return
             }
             else {
-                val dialog = CopyFilesOrDirectoriesDialog(arrayOf(originalFile), defaultTargetDirectory, project, false)
+                val dialog = CopyFilesOrDirectoriesDialog(arrayOf(originalFile), initialTargetDirectory, project, false)
                 if (!dialog.showAndGet()) return
                 openInEditor = dialog.openInEditor()
                 newName = dialog.newName
