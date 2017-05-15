@@ -25,14 +25,13 @@ import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
-import com.intellij.refactoring.MoveDestination
 import com.intellij.refactoring.RefactoringBundle
+import com.intellij.refactoring.copy.CopyFilesOrDirectoriesDialog
 import com.intellij.refactoring.copy.CopyHandlerDelegateBase
 import com.intellij.usageView.UsageInfo
 import com.intellij.util.IncorrectOperationException
 import org.jetbrains.annotations.TestOnly
 import org.jetbrains.kotlin.idea.codeInsight.shorten.performDelayedRefactoringRequests
-import org.jetbrains.kotlin.idea.core.getPackage
 import org.jetbrains.kotlin.idea.core.quoteIfNeeded
 import org.jetbrains.kotlin.idea.refactoring.createKotlinFile
 import org.jetbrains.kotlin.idea.refactoring.move.*
@@ -44,25 +43,26 @@ import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.UserDataProperty
 import org.jetbrains.kotlin.psi.psiUtil.parentsWithSelf
+import org.jetbrains.kotlin.utils.ifEmpty
 
-class CopyKotlinClassHandler : CopyHandlerDelegateBase() {
+class CopyKotlinClassesHandler : CopyHandlerDelegateBase() {
     companion object {
         @set:TestOnly
         var Project.newName: String? by UserDataProperty(Key.create("NEW_NAME"))
 
-        private fun PsiElement.getTopLevelClass(): KtClassOrObject? {
+        private fun PsiElement.getTopLevelClasses(): List<KtClassOrObject> {
             val classOrFile = parentsWithSelf.firstOrNull { it is KtFile || (it is KtClassOrObject && it.isTopLevel()) }
             return when (classOrFile) {
-                is KtFile -> classOrFile.declarations.singleOrNull() as? KtClassOrObject
-                is KtClassOrObject -> classOrFile
-                else -> null
+                is KtFile -> classOrFile.declarations.filterIsInstance<KtClassOrObject>()
+                is KtClassOrObject -> listOf(classOrFile)
+                else -> emptyList()
             }
         }
-
-        private fun getClassToCopy(elements: Array<out PsiElement>) = elements.singleOrNull()?.getTopLevelClass()
     }
 
-    override fun canCopy(elements: Array<out PsiElement>, fromUpdate: Boolean) = getClassToCopy(elements) != null
+    override fun canCopy(elements: Array<out PsiElement>, fromUpdate: Boolean): Boolean {
+        return elements.flatMap { it.getTopLevelClasses().ifEmpty { return false } }.distinctBy { it.containingFile }.size == 1
+    }
 
     enum class ExistingFilePolicy {
         APPEND, OVERWRITE, SKIP
@@ -132,9 +132,12 @@ class CopyKotlinClassHandler : CopyHandlerDelegateBase() {
     }
 
     override fun doCopy(elements: Array<out PsiElement>, defaultTargetDirectory: PsiDirectory?) {
-        val classToCopy = getClassToCopy(elements) ?: return
+        val classesToCopy = elements.flatMap { it.getTopLevelClasses() }
+        if (classesToCopy.isEmpty()) return
 
-        val originalFile = classToCopy.containingKtFile
+        val singleClassToCopy = classesToCopy.singleOrNull()
+
+        val originalFile = classesToCopy.first().containingKtFile
         val initialTargetDirectory = defaultTargetDirectory ?: originalFile.containingDirectory ?: return
 
         val project = initialTargetDirectory.project
@@ -144,33 +147,40 @@ class CopyKotlinClassHandler : CopyHandlerDelegateBase() {
         val commandName = RefactoringBundle.message("copy.handler.copy.class")
 
         var openInEditor = false
-        var newClassName: String? = classToCopy.name
-        var moveDestination: MoveDestination? = null
+        var newName: String? = singleClassToCopy?.name ?: originalFile.name
+        var targetDirWrapper: AutocreatingPsiDirectoryWrapper = initialTargetDirectory.toDirectoryWrapper()
 
         if (!ApplicationManager.getApplication().isUnitTestMode) {
-            val dialog = CopyKotlinClassDialog(classToCopy, initialTargetDirectory, project)
-            dialog.title = commandName
-            if (!dialog.showAndGet()) return
+            if (singleClassToCopy != null) {
+                val dialog = CopyKotlinClassDialog(singleClassToCopy, initialTargetDirectory, project)
+                dialog.title = commandName
+                if (!dialog.showAndGet()) return
 
-            openInEditor = dialog.openInEditor
-            newClassName = dialog.className
-            moveDestination = dialog.targetDirectory ?: return
+                openInEditor = dialog.openInEditor
+                newName = dialog.className ?: singleClassToCopy.name
+                targetDirWrapper = dialog.targetDirectory?.toDirectoryWrapper() ?: return
+            }
+            else {
+                val dialog = CopyFilesOrDirectoriesDialog(arrayOf(originalFile), defaultTargetDirectory, project, false)
+                if (!dialog.showAndGet()) return
+                openInEditor = dialog.openInEditor()
+                newName = dialog.newName
+                targetDirWrapper = dialog.targetDirectory?.toDirectoryWrapper() ?: return
+            }
         }
         else {
-            project.newName?.let { newClassName = it }
+            project.newName?.let { newName = it }
         }
 
-        if (newClassName.isNullOrEmpty()) return
+        if (singleClassToCopy != null && newName.isNullOrEmpty()) return
 
         val internalUsages = runReadAction {
-            val targetPackageName = moveDestination?.targetPackage?.qualifiedName
-                                    ?: initialTargetDirectory.getPackage()?.qualifiedName
-                                    ?: ""
+            val targetPackageName = targetDirWrapper.getPackageName()
             val changeInfo = ContainerChangeInfo(
                     ContainerInfo.Package(originalFile.packageFqName),
                     ContainerInfo.Package(FqName(targetPackageName))
             )
-            classToCopy.getInternalReferencesToUpdateOnPackageNameChange(changeInfo)
+            classesToCopy.flatMap { it.getInternalReferencesToUpdateOnPackageNameChange(changeInfo) }
         }
         markInternalUsages(internalUsages)
 
@@ -178,18 +188,19 @@ class CopyKotlinClassHandler : CopyHandlerDelegateBase() {
 
         project.executeCommand(commandName) {
             try {
-                val targetDirectory = runWriteAction { moveDestination?.getTargetDirectory(initialTargetDirectory) ?: initialTargetDirectory }
-                val targetFileName = newClassName + "." + originalFile.virtualFile.extension
+                val targetDirectory = runWriteAction { targetDirWrapper.getOrCreateDirectory(initialTargetDirectory) }
+                val targetFileName = if (newName?.contains(".") ?: false) newName!! else newName + "." + originalFile.virtualFile.extension
 
                 val targetFile = getOrCreateTargetFile(originalFile, targetDirectory, targetFileName, commandName) ?: return@executeCommand
 
                 runWriteAction {
-                    val newClass = targetFile.add(classToCopy.copy()) as KtClassOrObject
-                    newClass.setName(newClassName!!.quoteIfNeeded())
-
-                    val oldToNewElementsMapping: Map<PsiElement, PsiElement> = mapOf(classToCopy to newClass)
-                    restoredInternalUsages += restoreInternalUsages(newClass, oldToNewElementsMapping, true)
-                    postProcessMoveUsages(restoredInternalUsages, oldToNewElementsMapping)
+                    val newClasses = classesToCopy.map { targetFile.add(it.copy()) as KtClassOrObject }
+                    val oldToNewElementsMapping = classesToCopy.zip(newClasses).toMap<PsiElement, PsiElement>()
+                    newClasses.singleOrNull()?.setName(newName!!.quoteIfNeeded())
+                    for (newClass in newClasses) {
+                        restoredInternalUsages += restoreInternalUsages(newClass, oldToNewElementsMapping, true)
+                        postProcessMoveUsages(restoredInternalUsages, oldToNewElementsMapping)
+                    }
                 }
 
                 if (openInEditor) {
